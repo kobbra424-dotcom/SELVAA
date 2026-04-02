@@ -1,0 +1,93 @@
+import asyncio
+from playwright.async_api import async_playwright
+import sys
+import re
+
+async def run(full_phone_number):
+    async with async_playwright() as p:
+        # تشغيل المتصفح في وضع headless
+        browser = await p.chromium.launch(headless=True)
+        page = await browser.new_page()
+        
+        # التوجه للرابط
+        url = "https://partners.bolt.eu/login?lang=en-us&selectedTabIndex=1"
+        print(f"Navigating to {url}...")
+        await page.goto(url)
+        
+        # التأكد من تحميل الصفحة
+        await page.wait_for_selector("#phone")
+        
+        # تحليل الرقم لاستخراج رمز الدولة
+        match = re.match(r"(\+\d+)\s*(.*)", full_phone_number)
+        if match:
+            country_code = match.group(1)
+            phone_part = match.group(2).replace(" ", "")
+        else:
+            print("Error: Phone number must start with '+' followed by country code.")
+            await browser.close()
+            return
+
+        print(f"Detected Country Code: {country_code}, Phone: {phone_part}")
+
+        # تغيير رمز الدولة
+        # نضغط على زر اختيار الرمز
+        await page.click("div[role='button']:has-text('+')")
+        
+        # الانتظار لظهور حقل البحث وإدخال الرمز
+        search_input = "input[role='textbox']"
+        await page.wait_for_selector(search_input)
+        await page.fill(search_input, country_code)
+        
+        # اختيار الخيار المناسب من القائمة
+        option_selector = f"a[role='option']:has-text('{country_code}')"
+        await page.wait_for_selector(option_selector)
+        await page.click(option_selector)
+
+        # إدخال رقم الهاتف
+        print(f"Entering phone number: {phone_part}")
+        await page.fill("#phone", phone_part)
+        
+        # الانتظار حتى يصبح الزر مفعلاً
+        print("Waiting for Continue button to be enabled...")
+        # استخدام سلكتور أبسط للتحقق من الحالة
+        button_selector = "button#ember9" # السلكتور من فحص المتصفح السابق
+        try:
+            await page.wait_for_selector(button_selector)
+            # التأكد من أن الزر ليس معطلاً
+            await page.wait_for_function(
+                "id => !document.getElementById(id).disabled",
+                arg="ember9",
+                timeout=10000
+            )
+        except Exception as e:
+            print(f"Note: Button might already be enabled or selector changed. Proceeding... {e}")
+        
+        # الضغط على زر Continue
+        print("Clicking Continue...")
+        # Playwright handles :has-text in click/locator but not in raw querySelector within wait_for_function
+        await page.locator("button", has_text="Continue").click()
+        
+        # التحقق من ظهور رسالة النجاح
+        try:
+            success_text = "A verification code was sent to"
+            # ننتظر ظهور النص المطلوب في الصفحة
+            await page.wait_for_selector(f"text={success_text}", timeout=20000)
+            print("Successfully completed✅")
+        except Exception as e:
+            # التحقق من وجود رسالة خطأ بدلاً من النجاح
+            error_message = await page.inner_text("body")
+            if "A verification code was sent to" in error_message:
+                print("Successfully completed✅")
+            else:
+                print("Failed to detect success message or timed out.")
+                # حفظ لقطة شاشة للفحص
+                await page.screenshot(path="final_state.png")
+            
+        await browser.close()
+
+if __name__ == "__main__":
+    if len(sys.argv) < 2:
+        print("Usage: python3 bolt_login_automation.py \"+966 5XXXXXXXX\"")
+    else:
+        phone = sys.argv[1]
+        asyncio.run(run(phone))
